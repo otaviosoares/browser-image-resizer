@@ -9,6 +9,8 @@ const DEFAULT_CONFIG = {
   mimeType: 'image/jpeg'
 };
 
+const _browser_quirks = {};
+
 function dataURItoBuffer(dataURI) {
   var byteString = atob(dataURI.split(',')[1]);
   var ab = new ArrayBuffer(byteString.length);
@@ -26,9 +28,9 @@ export function readAndCompressImage(file, userConfig) {
     var reader = new FileReader();
     var config = Object.assign({}, DEFAULT_CONFIG, userConfig);
 
-    reader.onload = function(e) {
+    reader.onload = function (e) {
       img.src = e.target.result;
-      img.onload = function() {
+      img.onload = async function () {
         if (config.autoRotate) {
           if (config.debug)
             console.log(
@@ -46,7 +48,13 @@ export function readAndCompressImage(file, userConfig) {
                 Orientation
             );
           }
-          resolve(scaleImage(img, config, Orientation.value));
+          resolve(
+            scaleImage(
+              img,
+              config,
+              await dropOrientationIfNeeded(Orientation.value)
+            )
+          );
         }
       };
     };
@@ -178,10 +186,7 @@ function dataURIToBlob(dataURI) {
   var byteString = atob(dataURI.split(',')[1]);
 
   // separate out the mime component
-  var mimeString = dataURI
-    .split(',')[0]
-    .split(':')[1]
-    .split(';')[0];
+  var mimeString = dataURI.split(',')[0].split(':')[1].split(';')[0];
 
   // write the bytes of the string to an ArrayBuffer
   var ab = new ArrayBuffer(byteString.length);
@@ -312,3 +317,41 @@ function applyBilinearInterpolation(srcCanvasData, destCanvasData, scale) {
     }
   }
 }
+
+// Some browsers will automatically draw images respecting their EXIF orientation
+// while others won't, and the safest way to detect that is to examine how it
+// is done on a known image.
+// See https://github.com/w3c/csswg-drafts/issues/4666
+// and https://github.com/blueimp/JavaScript-Load-Image/commit/1e4df707821a0afcc11ea0720ee403b8759f3881
+const dropOrientationIfNeeded = orientation =>
+  new Promise(resolve => {
+    switch (_browser_quirks['image-orientation-automatic']) {
+      case true:
+        resolve(1);
+        break;
+      case false:
+        resolve(orientation);
+        break;
+      default:
+        // black 2x1 JPEG, with the following meta information set:
+        // - EXIF Orientation: 6 (Rotated 90° CCW)
+        const testImageURL =
+          'data:image/jpeg;base64,/9j/4QAiRXhpZgAATU0AKgAAAAgAAQESAAMAAAABAAYAAAA' +
+          'AAAD/2wCEAAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBA' +
+          'QEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE' +
+          'BAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAf/AABEIAAEAAgMBEQACEQEDEQH/x' +
+          'ABKAAEAAAAAAAAAAAAAAAAAAAALEAEAAAAAAAAAAAAAAAAAAAAAAQEAAAAAAAAAAAAAAAA' +
+          'AAAAAEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwA/8H//2Q==';
+        const img = new Image();
+        img.onload = () => {
+          const automatic = img.width === 1 && img.height === 2;
+          _browser_quirks['image-orientation-automatic'] = automatic;
+          resolve(automatic ? 1 : orientation);
+        };
+        img.onerror = () => {
+          _browser_quirks['image-orientation-automatic'] = false;
+          resolve(orientation);
+        };
+        img.src = testImageURL;
+    }
+  });
